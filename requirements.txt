@@ -1,4 +1,4 @@
 streamlit
 pandas
 requests
-langchain-google-genai
+langchain-google-genai>=2.0.0
