@@ -9,13 +9,14 @@ st.set_page_config(page_title="Budget AI Monitor", page_icon="💰")
 
 # --- 2. KEYS & INITIALIZATION ---
 try:
-    # Ensure these are set in your Streamlit Cloud Secrets
+    # These must be set in your Streamlit Cloud Secrets (Settings > Secrets)
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
     SLACK_WEBHOOK = st.secrets["SLACK_WEBHOOK"]
     
-    # Updated to 'gemini-1.5-flash-latest' to avoid 404 errors
+    # UPDATED: Using Gemini 2.0 Flash
+    # This model is faster and handles financial reasoning with better precision
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash-latest", 
+        model="gemini-2.0-flash", 
         google_api_key=GOOGLE_API_KEY,
         temperature=0
     )
@@ -32,13 +33,17 @@ def load_data():
         # Normalize column names to lowercase to prevent KeyErrors
         df.columns = df.columns.str.strip().str.lower()
         
-        # Ensure data types are numeric for calculations
-        df['budgeted'] = pd.to_numeric(df['budgeted'], errors='coerce')
-        df['actual'] = pd.to_numeric(df['actual'], errors='coerce')
+        # Convert columns to numeric, forcing errors to NaN then filling them
+        df['budgeted'] = pd.to_numeric(df['budgeted'], errors='coerce').fillna(0)
+        df['actual'] = pd.to_numeric(df['actual'], errors='coerce').fillna(0)
         
-        # Calculate Variance
+        # Calculate Variance math
         df['variance'] = df['actual'] - df['budgeted']
-        df['variance_%'] = (df['variance'] / df['budgeted']) * 100
+        # Avoid division by zero if budget is 0
+        df['variance_%'] = df.apply(
+            lambda x: (x['variance'] / x['budgeted'] * 100) if x['budgeted'] != 0 else 0, 
+            axis=1
+        )
         return df
     except FileNotFoundError:
         st.error("🚨 File 'Budget Trigger App.csv' not found. Ensure it is in your GitHub root folder.")
@@ -48,11 +53,12 @@ def load_data():
         st.stop()
 
 def get_ai_insight(dept, budgeted, actual, variance_pct):
-    """Feeds budget data to Gemini for contextual analysis."""
+    """Feeds budget data to Gemini 2.0 for contextual analysis."""
     prompt = (
-        f"Department: {dept}, Budget: {budgeted}, Actual: {actual}, Variance: {variance_pct:.2f}%. "
-        "As a financial expert, briefly explain if this overspend is critical or expected. "
-        "Provide a 1-sentence recommendation."
+        f"Context: Internal Budget Audit. "
+        f"Department: {dept}, Budget: ${budgeted:,.2f}, Actual: ${actual:,.2f}, Variance: {variance_pct:.2f}%. "
+        "Analyze if this overspend is a critical risk or a common operational fluctuation. "
+        "Provide a concise, 1-sentence executive recommendation."
     )
     try:
         response = llm.invoke(prompt)
@@ -61,7 +67,7 @@ def get_ai_insight(dept, budgeted, actual, variance_pct):
         return f"AI Analysis Error: {str(e)}"
 
 def send_slack(message):
-    """Sends the final alert to your Slack channel."""
+    """Sends the final alert to your Slack channel via Webhook."""
     try:
         requests.post(SLACK_WEBHOOK, json={"text": message}, timeout=5)
     except Exception as e:
@@ -69,13 +75,18 @@ def send_slack(message):
 
 # --- 4. MAIN USER INTERFACE ---
 st.title("💰 Budget Compliance Monitor")
-st.markdown("Monitoring real-time variances and generating AI-powered insights.")
+st.caption("Powered by Gemini 2.0 Flash Engine")
 
 # Load and display the data
 data = load_data()
-st.subheader("Current Department Spend Status")
+st.subheader("Current Spend Overview")
 st.dataframe(
-    data.style.format({"variance_%": "{:.2f}%", "budgeted": "${:,.2f}", "actual": "${:,.2f}"})
+    data.style.format({
+        "variance_%": "{:.2f}%", 
+        "budgeted": "${:,.2f}", 
+        "actual": "${:,.2f}",
+        "variance": "${:,.2f}"
+    })
 )
 
 if st.button("🚀 Run AI Compliance Audit"):
@@ -85,8 +96,8 @@ if st.button("🚀 Run AI Compliance Audit"):
     if not overspenders.empty:
         st.divider()
         for _, row in overspenders.iterrows():
-            with st.spinner(f"AI is reviewing {row['department']}..."):
-                # Pass cleaned lowercase keys to the AI function
+            with st.spinner(f"Gemini 2.0 is reviewing {row['department']}..."):
+                # Pass data to the AI
                 insight = get_ai_insight(
                     row['department'], 
                     row['budgeted'], 
@@ -94,13 +105,13 @@ if st.button("🚀 Run AI Compliance Audit"):
                     row['variance_%']
                 )
                 
-                # Show results in the app
+                # UI Display
                 st.warning(f"**{row['department'].upper()} Alert:** {insight}")
                 
-                # Send the "Ping" to Slack
+                # Slack Notification
                 slack_msg = f"🚨 *Budget Alert: {row['department'].upper()}*\n*Insight:* {insight}"
                 send_slack(slack_msg)
         
-        st.success("Audit complete. Alerts sent to Slack.")
+        st.success("Audit complete. Insights delivered to Slack.")
     else:
-        st.success("✅ All departments are within the 5% threshold.")
+        st.success("✅ All departments are currently within compliant thresholds.")
