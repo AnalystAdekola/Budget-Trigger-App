@@ -4,76 +4,82 @@ import requests
 import json
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-# --- 1. PAGE CONFIG & THEME ---
-st.set_page_config(page_title="Budget AI Monitor", page_icon="🚪")
+# --- 1. THEME & UI ---
+st.set_page_config(page_title="Budget AI Monitor", page_icon="🚶‍♂️")
 
-# Custom CSS to put a "Man Walking into Door" theme at the top corner
+# Man walking into door top corner theme
 st.markdown("""
     <style>
-    /* Positions an icon in the top right corner */
-    .top-corner-icon {
+    .corner-theme {
         position: absolute;
-        top: -50px;
-        right: 0px;
-        font-size: 50px;
+        top: -60px;
+        right: 10px;
+        font-size: 45px;
+        z-index: 100;
+    }
+    .stApp {
+        border-top: 8px solid #4CAF50;
     }
     </style>
-    <div class="top-corner-icon">🚶‍♂️🚪</div>
+    <div class="corner-theme">🚶‍♂️🚪</div>
     """, unsafe_allow_html=True)
 
-# Securely load keys from Streamlit Secrets
-GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-SLACK_WEBHOOK = st.secrets["SLACK_WEBHOOK"]
+# --- 2. KEYS & INITIALIZATION ---
+try:
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+    SLACK_WEBHOOK = st.secrets["SLACK_WEBHOOK"]
+    
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash", 
+        google_api_key=GOOGLE_API_KEY,
+        temperature=0
+    )
+except KeyError:
+    st.error("Missing Secrets! Add GOOGLE_API_KEY and SLACK_WEBHOOK to Streamlit Cloud Secrets.")
+    st.stop()
 
-# Initialize AI
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=GOOGLE_API_KEY)
-
-# --- 2. DATA ENGINE ---
+# --- 3. DATA ENGINE ---
 def load_data():
     try:
-        # Load your specific file
         df = pd.read_csv("Budget Trigger App.csv")
-        
-        # Clean column names (handles 'Department', 'Budgeted', 'Actual' automatically)
+        # Normalize columns to lowercase immediately
         df.columns = df.columns.str.strip().str.lower()
         
-        # Calculate Variance using the new lowercase keys
+        # Ensure numeric types
+        df['budgeted'] = pd.to_numeric(df['budgeted'])
+        df['actual'] = pd.to_numeric(df['actual'])
+        
         df['variance'] = df['actual'] - df['budgeted']
         df['variance_%'] = (df['variance'] / df['budgeted']) * 100
         return df
-    except FileNotFoundError:
-        st.error("🚨 File 'Budget Trigger App.csv' not found in GitHub.")
+    except Exception as e:
+        st.error(f"Error loading CSV: {e}")
         st.stop()
 
 def get_ai_insight(dept, budgeted, actual, variance_pct):
-    prompt = f"""
-    You are a Financial Controller. 
-    The {dept} department spent ${actual:,.2f} vs a budget of ${budgeted:,.2f} ({variance_pct:.1f}% variance).
-    Is this variance critical? Give a 1-sentence expert recommendation.
-    """
-    return llm.invoke(prompt).content
-
-def send_slack(message):
+    # Standardizing inputs as strings to prevent API crashes
+    prompt = f"Dept: {dept}, Budget: {budgeted}, Actual: {actual}, Variance: {variance_pct:.2f}%. Is this critical?"
     try:
-        requests.post(SLACK_WEBHOOK, data=json.dumps({"text": message}))
-    except:
-        pass
+        response = llm.invoke(prompt)
+        return response.content
+    except Exception as e:
+        return f"AI Analysis Unavailable: {str(e)}"
 
-# --- 3. UI ---
+# --- 4. MAIN APP ---
 st.title("💰 Budget Compliance Monitor")
 data = load_data()
 
-# Show the table with original-style headers for the user
-st.subheader("Current Department Spending")
-st.dataframe(data[['department', 'budgeted', 'actual', 'variance_%']].style.format({"variance_%": "{:.2f}%"}))
+st.subheader("Current Spend Data")
+st.dataframe(data.style.highlight_max(axis=0, subset=['variance_%'], color='#ff4b4b'))
 
-if st.button("🚀 Run AI Compliance Audit"):
-    # Check for overspenders (e.g., more than 5% over)
-    triggers = data[data['variance_%'] > 5.0]
+if st.button("🚀 Run AI Audit"):
+    # We use a 5% threshold
+    overspenders = data[data['variance_%'] > 5.0]
     
-    if not triggers.empty:
-        for _, row in triggers.iterrows():
-            with st.spinner(f"Analyzing {row['department']}..."):
+    if not overspenders.empty:
+        for _, row in overspenders.iterrows():
+            with st.spinner(f"Reviewing {row['department']}..."):
+                # Using the exact lowercase names that load_data() created
                 insight = get_ai_insight(
                     row['department'], 
                     row['budgeted'], 
@@ -81,11 +87,11 @@ if st.button("🚀 Run AI Compliance Audit"):
                     row['variance_%']
                 )
                 
-                # Display Results
-                st.warning(f"**{row['department'].upper()} ALERT:** {insight}")
+                st.warning(f"**{row['department'].title()} Alert:** {insight}")
                 
                 # Send to Slack
-                send_slack(f"📊 *AI Budget Audit*\n*Dept:* {row['department']}\n*Insight:* {insight}")
-        st.success("Audit complete. Slack pings sent.")
+                msg = f"Budget Alert: {row['department'].upper()}\nInsight: {insight}"
+                requests.post(SLACK_WEBHOOK, json={"text": msg})
+        st.success("Manager notified via Slack.")
     else:
-        st.success("No critical variances detected today.")
+        st.success("All budgets are compliant.")
