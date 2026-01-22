@@ -18,14 +18,14 @@ llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=GOOGLE_API
 def load_data():
     df = pd.read_csv("Budget Trigger App.csv")
     # Calculate Variance
-    df['Variance'] = df['actual'] - df['budgeted']
-    df['Variance_%'] = (df['Variance'] / df['budgeted']) * 100
+    df['Variance'] = df['Actual'] - df['Budgeted']
+    df['Variance_%'] = (df['Variance'] / df['Budgeted']) * 100
     return df
 
-def get_ai_insight(dept, budgeted, actual, variance_pct):
+def get_ai_insight(Department, Budgeted, Actual, variance_pct):
     prompt = f"""
     You are a Senior Financial Controller. 
-    The {dept} department spent ${actual:,} against a budget of ${budgeted:,} ({variance_pct:.1f}% variance).
+    The {Department} department spent ${Actual:,} against a budget of ${Budgeted:,} ({variance_pct:.1f}% variance).
     Context: It is currently January (a high-growth launch month). 
     Is this variance critical or expected? Give a 1-sentence recommendation.
     """
@@ -45,14 +45,14 @@ if st.button("Run AI Audit"):
     
     if not triggers.empty:
         for _, row in triggers.iterrows():
-            with st.spinner(f"AI Analyzing {row['department']}..."):
-                insight = get_ai_insight(row['department'], row['budgeted'], row['actual'], row['Variance_%'])
+            with st.spinner(f"AI Analyzing {row['Department']}..."):
+                insight = get_ai_insight(row['Department'], row['Budgeted'], row['Actual'], row['Variance_%'])
                 
                 # Display in App
-                st.warning(f"**{row['department']} Alert:** {insight}")
+                st.warning(f"**{row['Department']} Alert:** {insight}")
                 
                 # Send to Slack
-                send_slack(f"🚨 *Budget Alert: {row['department']}*\nInsight: {insight}")
+                send_slack(f"🚨 *Budget Alert: {row['Department']}*\nInsight: {insight}")
         st.success("Audit complete. Manager notified via Slack.")
     else:
         st.success("All departments are within the safe threshold.")
